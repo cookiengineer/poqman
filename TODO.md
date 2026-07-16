@@ -2,13 +2,13 @@
 
 ## Current State
 
-**All features implemented.** 247 unit tests + 12 QEMU/Dockerfile integration tests = **259 total**.
-**0 skips** in unit tests. All kernel API tests (`t.Fatalf` instead of `t.Skipf`).
+**All features implemented.** 251 unit tests + 13 integration tests.
+**0 skips** in unit tests — all kernel API tests use `t.Fatalf`.
 `go vet` clean. `CGO_ENABLED=0` builds for all binaries.
 
 ```
-CGO_ENABLED=0 go test $(go list ./... | grep -v lifecycle) -count=1    # 247 tests, 0 skips
-CGO_ENABLED=0 go test ./pkg/lifecycle/ -count=1 -run "Qemu|Dockerfile"  # 12 integration tests
+CGO_ENABLED=0 go test $(go list ./... | grep -v lifecycle) -count=1    # 251 tests, 0 skips
+CGO_ENABLED=0 go test ./pkg/lifecycle/ -count=1                         # 13 integration tests
 CGO_ENABLED=0 go vet ./...                                               # clean
 CGO_ENABLED=0 go build ./...                                             # clean
 ```
@@ -21,7 +21,7 @@ CGO_ENABLED=0 go build ./...                                             # clean
 |-------|-------|-------|
 | 1 | Foundation: stores, types, CLI framework | 26 |
 | 2 | Registry: OCI pull, Docker Hub auth | 20 |
-| 3 | Kernel: distro resolvers (Debian, Alpine, Arch) | 23 |
+| 3 | Kernel: distro resolvers (Debian, Alpine, Arch, Ubuntu) | 27 |
 | 4 | Runtime: QEMU, networking, poqman-init | 30 |
 | 5 | Agent: virtio-serial exec | 12 |
 | 6 | Lifecycle: rm/rmi/inspect | 13 |
@@ -35,34 +35,17 @@ CGO_ENABLED=0 go build ./...                                             # clean
 
 ## Remaining Tasks
 
-### High Priority — Network Dependency Verification
-- [ ] **Verify all kernel API tests remain non-skipping** — The resolvers query
-  external APIs (debian.org, alpinelinux.org, archlinux.org). If these APIs
-  change or packages are removed, tests will fail. Need monitoring.
-  - `TestResolveDebianPackage_Real` — madison API, uses `6.1.0-50-amd64:6.1.176-1`
-  - `TestResolveAlpinePackage_Real` — pkgs.alpinelinux.org, uses `3.21/lts`
-  - `TestResolveArchPackage_Real` — archive.archlinux.org, uses `6.9.9`
-  - All use `t.Fatalf` (fail hard, no silent skip)
-
-- [ ] **Ubuntu kernel support** — Add `resolver_ubuntu.go` with Ubuntu kernel
-  package resolution. Ubuntu uses `.deb` packages hosted at `archive.ubuntu.com`.
-  Kernel packages follow `linux-image-{version}-generic` naming.
-  - KERNEL syntax: `ubuntu:6.8.0-50-generic` or `ubuntu:6.8.0-50:generic`
-  - Package URL: `http://archive.ubuntu.com/ubuntu/pool/main/l/linux/`
-  - Or use Launchpad API for package metadata lookup
-
 ### Medium Priority
-- [ ] System integration: real VM boot with all three distro kernels
 - [ ] `.dockerignore` `**` globstar deep recursive matching
+- [ ] Fedora/RHEL kernel resolver
 
 ### Low Priority
 | Task | Effort |
 |------|--------|
 | `poqman push` | Large |
 | `poqman compose` | Large |
-| Multi-stage builds (FROM ... AS + COPY --from) | Medium |
+| Multi-stage builds | Medium |
 | Build layer caching | Large |
-| Fedora/RHEL kernel resolver | Medium |
 
 ---
 

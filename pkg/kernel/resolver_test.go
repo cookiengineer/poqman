@@ -16,10 +16,10 @@ func TestResolverRegistry_KnownDistros(t *testing.T) {
 		{"debian", true},
 		{"alpine", true},
 		{"archlinux", true},
+		{"ubuntu", true},
 		{"oci", true},
 		{"http", true},
 		{"https", true},
-		{"ubuntu", false},
 		{"fedora", false},
 	}
 
@@ -172,4 +172,50 @@ func TestFindKernelBinary(t *testing.T) {
 			t.Error("expected error when no kernel found")
 		}
 	})
+}
+
+func TestUbuntuResolver_ExplicitVersion(t *testing.T) {
+	r := NewUbuntuResolver()
+	req := &ResolveRequest{Distro: "ubuntu", Version: "7.0.0-28-generic:7.0.0-28.28", Arch: "amd64"}
+	url, format, err := r.Resolve(req)
+	if err != nil {
+		t.Fatalf("explicit version: %v", err)
+	}
+	if url == "" || format != "deb" {
+		t.Errorf("expected url and deb, got url=%q format=%q", url, format)
+	}
+	t.Logf("Ubuntu URL: %s", url)
+}
+
+func TestUbuntuResolver_AutoResolve(t *testing.T) {
+	r := NewUbuntuResolver()
+	req := &ResolveRequest{Distro: "ubuntu", Version: "7.0.0-28-generic", Arch: "amd64"}
+	url, format, err := r.Resolve(req)
+	if err != nil {
+		t.Fatalf("ubuntu auto-resolution: %v", err)
+	}
+	if url == "" || format != "deb" {
+		t.Fatalf("expected url and deb, got url=%q format=%q", url, format)
+	}
+	t.Logf("Ubuntu auto-resolved URL: %s", url)
+}
+
+func TestUbuntuResolver_InvalidVersion(t *testing.T) {
+	r := NewUbuntuResolver()
+	req := &ResolveRequest{Distro: "ubuntu", Version: "invalid", Arch: "amd64"}
+	_, _, err := r.Resolve(req)
+	if err == nil {
+		t.Error("expected error for invalid ubuntu kernel version")
+	}
+}
+
+func TestResolveUbuntuPackage_Real(t *testing.T) {
+	ref, err := ResolveUbuntuPackage("7.0.0-28-generic", "amd64")
+	if err != nil {
+		t.Fatalf("Ubuntu pool API failed (network or API changed): %v", err)
+	}
+	if ref == "" {
+		t.Fatal("expected non-empty resolved reference")
+	}
+	t.Logf("Ubuntu: Resolved kernel: %s", ref)
 }

@@ -30,6 +30,7 @@ func NewResolverRegistry() *ResolverRegistry {
 	reg.resolvers["debian"] = NewDebianResolver()
 	reg.resolvers["alpine"] = NewAlpineResolver()
 	reg.resolvers["archlinux"] = NewArchLinuxResolver()
+	reg.resolvers["ubuntu"] = NewUbuntuResolver()
 	reg.resolvers["oci"] = &OCIResolver{}
 	reg.resolvers["http"] = &HTTPResolver{}
 	reg.resolvers["https"] = &HTTPResolver{}

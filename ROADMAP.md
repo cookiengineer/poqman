@@ -1,7 +1,7 @@
 # poqman — ROADMAP
 
 ## Phases 1-10: Complete ✅
-All 15 CLI commands. 259 tests (0 skips in unit tests).
+All 15 CLI commands. 251 unit tests (0 skips) + integration tests.
 Dockerfile parser with 17 instruction types. QEMU-based RUN execution.
 Bridge + TAP networking with IPv6 + DHCP. Cgroup resource limits.
 Image save/load. Health checks. System integration tests with real
@@ -10,25 +10,20 @@ QEMU VMs + actual Debian kernel package downloads.
 ## Phase 11: Kernel & Network Hardening
 
 ### Completed
-- [x] **Debian resolver URL fix** — Changed from `pool/main/l/linux/` to
-  `pool/main/l/linux-signed-amd64/` for signed kernel packages.
-- [x] **Alpine resolver HTML parser fix** — Updated to match new package page
-  structure. Added `stripHTMLTags()` for clean version extraction.
-- [x] **Arch resolver fix** — Fixed package version parsing (arch suffix
-  stripping, dot-separated versions after kernel version).
-- [x] **Madison API fix** — Removed `&f=json` parameter; plain text format
-  is parsed correctly by pipe-split logic.
-- [x] **All kernel API tests use `t.Fatalf`** — No silent skips. 7 tests
-  now fail loudly if network resources change.
-- [x] **ImageIndex thread safety** — Added `sync.RWMutex` to prevent
-  concurrent map access panics.
+All items finished. 251 unit tests, 0 skips. Four Linux distros supported.
 
-### In Progress / TODOs
-- [ ] **Ubuntu kernel resolver** — New `resolver_ubuntu.go`. Package format
-  is `.deb`, hosted at `archive.ubuntu.com`. Syntax: `KERNEL "ubuntu:6.8.0-50-generic"`.
-- [ ] **Verify kernel API tests periodically** — The 7 network-dependent
-  tests query live APIs. If Debian/Alpine/Arch remove packages or change
-  their HTML structure, tests will fail (by design — no silent skip).
+- [x] **Debian resolver URL fix** — `pool/main/l/linux-signed-amd64/` for signed packages.
+- [x] **Alpine resolver HTML parser fix** — Updated for new package page + `stripHTMLTags()`.
+- [x] **Arch resolver fix** — Package version parsing with arch suffix stripping.
+- [x] **Madison API fix** — Removed `&f=json`; plain text pipe format.
+- [x] **All kernel API tests use `t.Fatalf`** — 10 tests, 0 silent skips.
+- [x] **ImageIndex thread safety** — `sync.RWMutex` on index map.
+- [x] **Ubuntu kernel resolver** — `resolver_ubuntu.go`. Auto-resolution via
+  `archive.ubuntu.com` pool scraper. `KERNEL "ubuntu:7.1.0-5-generic"`.
+  Zstd extraction for modern Ubuntu .deb packages.
+- [x] **Ubuntu LTS + kernel boot test** — Full lifecycle: FROM ubuntu:latest →
+  KERNEL ubuntu → build → extract 17MB kernel → boot VM → verify
+  `Linux version 7.1.0-5-generic #5-Ubuntu`.
 
 ## Phase 12: Remaining Work
 

@@ -147,6 +147,8 @@ func ExtractDeb(debPath string, outputDir string) error {
 		return extractTarGz(dataTar, extractDir)
 	} else if strings.HasSuffix(dataTar, ".xz") {
 		return extractTarXz(dataTar, extractDir)
+	} else if strings.HasSuffix(dataTar, ".zst") {
+		return extractTarZst(dataTar, extractDir)
 	}
 	return fmt.Errorf("unsupported archive format: %s", dataTar)
 }
@@ -176,6 +178,21 @@ func extractTarXz(tarPath, destDir string) error {
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start xzcat: %w", err)
+	}
+	defer cmd.Wait()
+
+	return extractTar(stdout, destDir)
+}
+
+func extractTarZst(tarPath, destDir string) error {
+	cmd := exec.Command("zstdcat", tarPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("create zstd pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start zstdcat: %w", err)
 	}
 	defer cmd.Wait()
 

@@ -242,12 +242,12 @@ with QEMU and skip only for missing QEMU binary.
 | pkg/storage | 68.6% | 12 |
 | pkg/dockerfile | 54.1% | 92 |
 | pkg/image | 52.9% | 18 |
-| pkg/kernel | 43.9% | 23 |
+| pkg/kernel | 43.9% | 27 |
 | pkg/runtime | 40.9% | 30 |
 | pkg/network | 23.9% | 9 |
 | pkg/registry | 20.8% | 20 |
 | pkg/cli | 14.5% | 46 |
-| pkg/lifecycle | e2e | 12 |
+| pkg/lifecycle | e2e | 13 |
 
 ### 14. Supported Linux Distributions for Kernels
 
@@ -258,7 +258,7 @@ with QEMU and skip only for missing QEMU binary.
 | Arch Linux | ✅ | `archive.archlinux.org` (HTML scraper) | `archive.archlinux.org` |
 | OCI | ✅ | OCI registry pull | `docker.io` |
 | HTTP/HTTPS | ✅ | Direct URL download | Any |
-| Ubuntu | 🔲 TODO | Launchpad/archive.ubuntu.com | `archive.ubuntu.com` |
+| Ubuntu | ✅ | `archive.ubuntu.com` (pool scraper) + `zstdcat` extraction | `archive.ubuntu.com/ubuntu/pool/main/l/linux-signed/` |
 
 Lower coverage in runtime/kernel/network/registry is expected for packages
 with heavy I/O, system calls, and external HTTP/network dependencies.
