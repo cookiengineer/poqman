@@ -1,6 +1,7 @@
 package dockerfile
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -263,7 +264,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 
 	qemuArgs := []string{
 		"-kernel", kernelPath,
-		"-append", "root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet init=/tmp/poqman-build.sh",
+		"-append", "root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet panic=1 init=/tmp/poqman-build.sh",
 		"-fsdev", fmt.Sprintf("local,id=rootfs,path=%s,security_model=mapped-xattr", b.curRootfs),
 		"-device", "virtio-9p-pci,fsdev=rootfs,mount_tag=rootfs",
 		"-m", "512M",
@@ -278,8 +279,24 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "  Warning: build VM exited with error: %v\n", err)
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer buildCancel()
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start build VM: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: build VM exited with error: %v\n", err)
+		}
+	case <-buildCtx.Done():
+		cmd.Process.Kill()
+		fmt.Fprintf(os.Stderr, "  Warning: build VM timed out after 120s, killed\n")
 	}
 
 	exitCodePath := filepath.Join(b.curRootfs, "tmp", "poqman-exit-code")
@@ -296,8 +313,12 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 	}
 
 	layerDigest := fmt.Sprintf("sha256:build-run-%d", len(b.layers))
-	layerDir := b.paths.ImageLayerPath("build-"+b.tag, layerDigest)
+	layerDir := b.paths.ImageLayerPath("build-"+strings.ReplaceAll(b.tag, "/", "-"), layerDigest)
 	layerFile := filepath.Join(layerDir, "layer.tar.gz")
+
+	if err := os.MkdirAll(filepath.Dir(layerFile), storage.DefaultPerms); err != nil {
+		return fmt.Errorf("create layer dir: %w", err)
+	}
 
 	changed, err := createDiffLayer(snapshot, b.curRootfs, layerFile)
 	if err != nil {

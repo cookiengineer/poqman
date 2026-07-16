@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,7 @@ type Layer struct {
 }
 
 type ImageIndex struct {
+	mu     sync.RWMutex
 	Images map[string]string `json:"images"`
 }
 
@@ -46,14 +48,20 @@ func NewImageIndex() *ImageIndex {
 }
 
 func (idx *ImageIndex) Add(name string, id string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	idx.Images[name] = id
 }
 
 func (idx *ImageIndex) Remove(name string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	delete(idx.Images, name)
 }
 
 func (idx *ImageIndex) Lookup(name string) (string, bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	id, ok := idx.Images[name]
 	return id, ok
 }

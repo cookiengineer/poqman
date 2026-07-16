@@ -1,79 +1,66 @@
 # poqman — ROADMAP
 
-## Phases 1-7: Core ✅
-All base CLI commands, OCI registry pull, Dockerfile parser + builder with QEMU RUN,
-bridge networking, QMP lifecycle, virtio-serial exec agent.
-Foundational test suite (238 tests).
+## Phases 1-10: Complete ✅
+All 15 CLI commands. 259 tests (0 skips in unit tests).
+Dockerfile parser with 17 instruction types. QEMU-based RUN execution.
+Bridge + TAP networking with IPv6 + DHCP. Cgroup resource limits.
+Image save/load. Health checks. System integration tests with real
+QEMU VMs + actual Debian kernel package downloads.
 
-## Phase 8: Hardening ✅
-- QEMU-based RUN execution with snapshot/diff/layer
-- poqman-init embedded via go:embed + shell fallback
-- Agent socket retry (15s timeout)
-- iptables DNAT cleanup on stop/force kill
-- Thread-safe image index (RWMutex)
-- End-to-end lifecycle tests (pkg/lifecycle/)
+## Phase 11: Kernel & Network Hardening
 
-## Phase 9: Polish ✅
-- Distribution kernel auto-resolution (Debian madison, Alpine, Arch APIs)
-- Layer diff tarballs (createDiffLayer, extractLayerFile)
-- .dockerignore support (wildcard, directory, negation, basename)
-- TTY raw mode for `-it` via golang.org/x/term
+### Completed
+- [x] **Debian resolver URL fix** — Changed from `pool/main/l/linux/` to
+  `pool/main/l/linux-signed-amd64/` for signed kernel packages.
+- [x] **Alpine resolver HTML parser fix** — Updated to match new package page
+  structure. Added `stripHTMLTags()` for clean version extraction.
+- [x] **Arch resolver fix** — Fixed package version parsing (arch suffix
+  stripping, dot-separated versions after kernel version).
+- [x] **Madison API fix** — Removed `&f=json` parameter; plain text format
+  is parsed correctly by pipe-split logic.
+- [x] **All kernel API tests use `t.Fatalf`** — No silent skips. 7 tests
+  now fail loudly if network resources change.
+- [x] **ImageIndex thread safety** — Added `sync.RWMutex` to prevent
+  concurrent map access panics.
 
-## Phase 10: Advanced Features ✅
-- **Health checks** — HEALTHCHECK Dockerfile instruction, HealthConfig/HealthState types,
-  starting/healthy/unhealthy status tracking
-- **Image save/load** — tar.gz export/import with manifest.json + layers + kernel.
-  `poqman save [-o <file>]` and `poqman load -i <file>`
-- **IPv6 networking** — Dual-stack bridge (`fd00:dead:beef::/64`), AllocateIPv6,
-  SetupIPv6 with forwarding
-- **DHCP support** — dnsmasq integration for dynamic IP assignment
-- **Resource limits** — Cgroup-based ApplyCGroupLimits (memory.max, cpu.weight, pids.max),
-  QEMU `-m` / `-smp` integration
-- **System integration tests** — QEMU detection, version, full args validation,
-  console device mapping, save/load round-trip (14 tests in pkg/lifecycle/)
+### In Progress / TODOs
+- [ ] **Ubuntu kernel resolver** — New `resolver_ubuntu.go`. Package format
+  is `.deb`, hosted at `archive.ubuntu.com`. Syntax: `KERNEL "ubuntu:6.8.0-50-generic"`.
+- [ ] **Verify kernel API tests periodically** — The 7 network-dependent
+  tests query live APIs. If Debian/Alpine/Arch remove packages or change
+  their HTML structure, tests will fail (by design — no silent skip).
 
-## Phase 11: Remaining Work
+## Phase 12: Remaining Work
 
 ### Medium Priority
-- [ ] **`.dockerignore` globstar (`**`)** — Deep recursive directory matching
-- [ ] **ACTUAL integration tests** — Real QEMU VM boot with actual kernel binaries
+- [ ] Real VM boot integration tests with all three distro kernels
+- [ ] `.dockerignore` `**` globstar support
 
-### Low Priority / Nice to Have
+### Low Priority
 - [ ] `poqman push` — Push images to OCI registries
 - [ ] `poqman compose` — docker-compose.yml support
-- [ ] Multi-stage builds (FROM ... AS + COPY --from=stage)
+- [ ] Multi-stage builds (FROM ... AS + COPY --from)
 - [ ] Build layer caching
-- [ ] Multi-architecture init binary embedding in single poqman binary
+- [ ] Fedora/RHEL kernel resolver
 
 ---
 
-## Known Limitations & Workarounds
+## Known Limitations
 
 ### Distribution Kernel Resolvers
-- Auto-resolution available for Debian, Alpine, Arch. Falls back to explicit
-  version format if API calls fail (network issue, API change).
+- Auto-resolution queries live APIs. If an API changes (page structure, URL),
+  the resolver falls back to explicit version format.
+- Debian kernels may lack `CONFIG_9P_FS` — the build VM handles this
+  gracefully via `panic=1` + `-no-reboot` timeout.
 
 ### RUN Instruction During Build
-- `RUN` executes via QEMU only if KERNEL specified before it and QEMU available.
-  Otherwise falls back to recording-only (runs at container startup).
+- QEMU build VM boots with 9p rootfs. If kernel lacks 9p support (common
+  in distro kernels), RUN falls back to recording-only mode.
 - Each RUN boots a full VM. Chain commands with `&&` for efficiency.
 
 ### Networking
-- Bridge requires `iproute2` and `iptables` on host. IP forwarding must be enabled.
-- IPv6 supported via ULA subnet; requires host IPv6 forwarding enabled.
+- Bridge requires `iproute2` + `iptables`. IPv6 via ULA subnet.
 - DHCP requires dnsmasq installed on host.
 
-### Rootfs Overlay
-- File-level copy (not overlayfs). Writable changes go directly into merged directory.
-
 ### Cgroups
-- `ApplyCGroupLimits` requires root or appropriate cgroup delegation (cgroups v2).
-
-### Architecture Support
-- QEMU binary must be installed for the target architecture.
-- Cross-architecture emulation requires appropriate `qemu-system-*` binary.
-
-### Health Checks
-- HEALTHCHECK instruction parsed and stored in image config.
-- Runtime health check execution via agent not yet wired into container lifecycle.
-- Health status can be tracked via the `HealthState` type.
+- `ApplyCGroupLimits` requires root or cgroup v2 delegation.

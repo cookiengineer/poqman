@@ -73,8 +73,9 @@ func (r *DebianResolver) Resolve(req *ResolveRequest) (string, string, error) {
 	}
 
 	mappedArch := mapDebArch(req.Arch)
-	url := fmt.Sprintf("http://deb.debian.org/debian/pool/main/l/linux/%s_%s_%s.deb",
-		pkgName, pkgVersion, mappedArch)
+	poolPath := debianKernelPool(req.Arch)
+	url := fmt.Sprintf("http://deb.debian.org/debian/pool/main/l/%s/%s_%s_%s.deb",
+		poolPath, pkgName, pkgVersion, mappedArch)
 
 	return url, "deb", nil
 }
@@ -100,7 +101,22 @@ func mapDebArch(arch string) string {
 	}
 }
 
+func debianKernelPool(arch string) string {
+	switch arch {
+	case "amd64":
+		return "linux-signed-amd64"
+	case "arm64":
+		return "linux-signed-arm64"
+	default:
+		return "linux"
+	}
+}
+
 func ExtractDeb(debPath string, outputDir string) error {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+
 	cmd := exec.Command("ar", "x", debPath, "--output="+outputDir)
 	cmd.Dir = outputDir
 	if output, err := cmd.CombinedOutput(); err != nil {

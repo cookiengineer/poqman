@@ -67,10 +67,10 @@ func TestDebianResolver_WithPkgVersion(t *testing.T) {
 
 func TestAlpineResolver_RequiresReleaseAndVersion(t *testing.T) {
 	r := NewAlpineResolver()
-	req := &ResolveRequest{Distro: "alpine", Version: "3.21", Arch: "x86_64"}
+	req := &ResolveRequest{Distro: "alpine", Version: "invalid", Arch: "x86_64"}
 	_, _, err := r.Resolve(req)
 	if err == nil {
-		t.Error("expected error for missing flavor/version")
+		t.Error("expected error for invalid format")
 	}
 }
 
@@ -91,10 +91,10 @@ func TestAlpineResolver_WithFullVersion(t *testing.T) {
 
 func TestArchLinuxResolver_RequiresPkgVersion(t *testing.T) {
 	r := NewArchLinuxResolver()
-	req := &ResolveRequest{Distro: "archlinux", Version: "6.10.10", Arch: "x86_64"}
+	req := &ResolveRequest{Distro: "archlinux", Version: "invalid", Arch: "x86_64"}
 	_, _, err := r.Resolve(req)
 	if err == nil {
-		t.Error("expected error for missing package version")
+		t.Error("expected error for invalid version")
 	}
 }
 

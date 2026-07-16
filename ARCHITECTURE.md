@@ -230,7 +230,11 @@ from such archives, registering the image in the local store.
 
 **Zero third-party dependencies.** stdlib + golang.org/x only.
 
-### 13. Test Coverage (269 tests, all passing)
+### 13. Test Coverage (259 tests, 0 skips in unit tests)
+
+**All kernel API tests use `t.Fatalf`** — no silent skips when network resources
+change. All integration tests (QEMU VM boot, Dockerfile build) run on hosts
+with QEMU and skip only for missing QEMU binary.
 
 | Package | Coverage | Tests |
 |---------|----------|-------|
@@ -243,7 +247,18 @@ from such archives, registering the image in the local store.
 | pkg/network | 23.9% | 9 |
 | pkg/registry | 20.8% | 20 |
 | pkg/cli | 14.5% | 46 |
-| pkg/lifecycle | e2e | 31 |
+| pkg/lifecycle | e2e | 12 |
+
+### 14. Supported Linux Distributions for Kernels
+
+| Distro | Status | Auto-Resolution | Package Pool |
+|--------|--------|-----------------|--------------|
+| Debian | ✅ | `api.ftp-master.debian.org/madison` | `linux-signed-amd64` |
+| Alpine | ✅ | `pkgs.alpinelinux.org` (HTML parser) | `dl-cdn.alpinelinux.org` |
+| Arch Linux | ✅ | `archive.archlinux.org` (HTML scraper) | `archive.archlinux.org` |
+| OCI | ✅ | OCI registry pull | `docker.io` |
+| HTTP/HTTPS | ✅ | Direct URL download | Any |
+| Ubuntu | 🔲 TODO | Launchpad/archive.ubuntu.com | `archive.ubuntu.com` |
 
 Lower coverage in runtime/kernel/network/registry is expected for packages
 with heavy I/O, system calls, and external HTTP/network dependencies.

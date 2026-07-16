@@ -13,7 +13,7 @@ func ResolveDebianPackage(kernelVersion, arch string) (string, error) {
 		pkgName = "linux-image-" + kernelVersion + "-" + arch
 	}
 
-	url := fmt.Sprintf("https://api.ftp-master.debian.org/madison?package=%s&s=bookworm&a=%s&f=json",
+	url := fmt.Sprintf("https://api.ftp-master.debian.org/madison?package=%s&s=bookworm&a=%s",
 		pkgName, mapDebArch(arch))
 
 	resp, err := http.Get(url)
@@ -72,19 +72,24 @@ func ResolveAlpinePackage(kernelVersion, flavor, arch string) (string, error) {
 
 	html := string(body)
 
-	versionMarker := `<td class="version">`
+	versionMarker := `<th class="header">Version</th>`
 	idx := strings.Index(html, versionMarker)
 	if idx < 0 {
 		return "", fmt.Errorf("version not found on alpine package page for %s", pkgName)
 	}
 
-	start := idx + len(versionMarker)
-	end := strings.Index(html[start:], "</td>")
-	if end < 0 {
-		return "", fmt.Errorf("version end not found")
+	tdStart := strings.Index(html[idx:], "<td>")
+	if tdStart < 0 {
+		return "", fmt.Errorf("version td not found")
+	}
+	tdStart += idx + 4
+	tdEnd := strings.Index(html[tdStart:], "</td>")
+	if tdEnd < 0 {
+		return "", fmt.Errorf("version td end not found")
 	}
 
-	version := strings.TrimSpace(html[start : start+end])
+	version := strings.TrimSpace(html[tdStart : tdStart+tdEnd])
+	version = stripHTMLTags(version)
 
 	fullRef := fmt.Sprintf("alpine:%s:%s:%s", release, flavor, version)
 	return fullRef, nil
@@ -105,7 +110,7 @@ func ResolveArchPackage(kernelVersion string) (string, error) {
 	}
 
 	html := string(body)
-	searchPattern := fmt.Sprintf("linux-%s-", kernelVersion)
+	searchPattern := fmt.Sprintf("linux-%s.", kernelVersion)
 
 	idx := strings.Index(html, searchPattern)
 	if idx < 0 {
@@ -127,13 +132,37 @@ func ResolveArchPackage(kernelVersion string) (string, error) {
 	filename = strings.TrimSuffix(filename, ".pkg.tar.zst")
 	filename = strings.TrimSuffix(filename, ".pkg.tar.xz")
 
-	parts := strings.SplitN(filename, "-", 4)
-	if len(parts) < 4 {
+	prefix := "linux-" + kernelVersion + "."
+	rest := strings.TrimPrefix(filename, prefix)
+	if rest == filename {
 		return "", fmt.Errorf("unexpected package name format: %s", filename)
 	}
 
-	pkgVer := parts[3]
+	for _, archSuffix := range []string{"-x86_64", "-amd64", "-aarch64", "-armv7h"} {
+		rest = strings.TrimSuffix(rest, archSuffix)
+	}
+
+	pkgVer := rest
 
 	fullRef := fmt.Sprintf("archlinux:%s:%s", kernelVersion, pkgVer)
 	return fullRef, nil
+}
+
+func stripHTMLTags(s string) string {
+	result := ""
+	inTag := false
+	for _, ch := range s {
+		if ch == '<' {
+			inTag = true
+			continue
+		}
+		if ch == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			result += string(ch)
+		}
+	}
+	return result
 }
