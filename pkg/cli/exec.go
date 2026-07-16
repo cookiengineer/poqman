@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cookiengineer/poqman/pkg/container"
 	"github.com/cookiengineer/poqman/pkg/runtime"
@@ -46,15 +47,25 @@ func RegisterExec(router *Router) {
 
 			agentSocket := paths.ContainerAgentSocketPath(c.ID)
 
-			client, err := runtime.AgentConnect(agentSocket)
-			if err != nil {
-				return fmt.Errorf("connect to agent: %w\nMake sure poqman-agent is running inside the container", err)
+			var client *runtime.AgentClient
+			var lastErr error
+			for attempt := 0; attempt < 30; attempt++ {
+				client, lastErr = runtime.AgentConnect(agentSocket)
+				if lastErr == nil {
+					if err := client.Ping(); err == nil {
+						break
+					}
+					client.Close()
+				}
+				if attempt == 0 {
+					fmt.Fprintf(os.Stderr, "Waiting for agent to become ready...\n")
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			if lastErr != nil || client == nil {
+				return fmt.Errorf("connect to agent after 15s: %w\nMake sure poqman-agent is running inside the container", lastErr)
 			}
 			defer client.Close()
-
-			if err := client.Ping(); err != nil {
-				return fmt.Errorf("agent not responding: %w", err)
-			}
 
 			cwd := *workdir
 			var env []string

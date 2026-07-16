@@ -15,14 +15,49 @@ func (r *AlpineResolver) Name() string { return "alpine" }
 
 func (r *AlpineResolver) Resolve(req *ResolveRequest) (string, string, error) {
 	parts := strings.SplitN(req.Version, ":", 2)
-	if len(parts) != 2 {
+	if len(parts) != 2 && !strings.HasPrefix(req.Version, "3.") && !strings.HasPrefix(req.Version, "edge") {
 		return "", "", fmt.Errorf(
-			"alpine kernel requires release:flavor:version format.\n"+
-				"Usage: poqman kernel pull alpine:<release>:<flavor>:<version>\n"+
-				"Example: poqman kernel pull alpine:3.21:lts:6.6.52-0-lts\n"+
+			"alpine kernel requires release or release:flavor:version format.\n"+
+				"Usage: poqman kernel pull alpine:<release>\n"+
+				"       poqman kernel pull alpine:<release>:<flavor>:<version>\n"+
+				"Example: poqman kernel pull alpine:3.21\n"+
+				"         poqman kernel pull alpine:3.21:lts:6.6.52-0-lts\n"+
 				"Find packages at: https://pkgs.alpinelinux.org/packages\n"+
 				"Common flavors: lts, virt, standard",
 		)
+	}
+
+	if len(parts) == 1 {
+		release := parts[0]
+		flavor := "lts"
+		resolved, err := ResolveAlpinePackage(release, flavor, req.Arch)
+		if err != nil {
+			return "", "", fmt.Errorf(
+				"alpine kernel auto-resolution failed: %v\n"+
+					"Specify full version manually: alpine:<release>:<flavor>:<version>\n"+
+					"Example: alpine:3.21:lts:6.6.52-0-lts",
+				err,
+			)
+		}
+		parsed, _ := ParseKernelRef(resolved)
+		req.Version = parsed.Version
+		parts = strings.SplitN(req.Version, ":", 2)
+	}
+
+	if len(parts) == 2 && !strings.Contains(parts[1], ":") {
+		release := parts[0]
+		flavor := parts[1]
+		resolved, err := ResolveAlpinePackage(release, flavor, req.Arch)
+		if err != nil {
+			return "", "", fmt.Errorf(
+				"alpine kernel auto-resolution failed: %v\n"+
+					"Specify full version manually: alpine:%s:%s:<version>",
+				err, release, flavor,
+			)
+		}
+		parsed, _ := ParseKernelRef(resolved)
+		req.Version = parsed.Version
+		parts = strings.SplitN(req.Version, ":", 2)
 	}
 
 	// Parse: alpine:release:flavor:version

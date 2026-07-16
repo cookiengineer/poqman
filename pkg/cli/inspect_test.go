@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -284,6 +287,10 @@ func TestFormatTime(t *testing.T) {
 }
 
 func TestPrintJSON_StringOutput(t *testing.T) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
 	v := map[string]string{"key": "value"}
 	err := printJSON(v)
 	if err != nil {
@@ -294,5 +301,13 @@ func TestPrintJSON_StringOutput(t *testing.T) {
 	err = printJSON(v2)
 	if err != nil {
 		t.Errorf("printJSON array should not error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	if buf.Len() == 0 {
+		t.Error("expected output from printJSON")
 	}
 }

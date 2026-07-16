@@ -60,6 +60,9 @@ func RegisterStop(router *Router) {
 			waitForContainerExit(c, time.Duration(*timeout)*time.Second)
 
 			netManager := network.NewManager(paths)
+			for _, port := range c.Ports {
+				netManager.RemovePortForward(port.HostPort, port.Protocol)
+			}
 			if c.IP != "" {
 				netManager.ReleaseIP(c.ID)
 			}
@@ -79,6 +82,14 @@ func forceKillContainer(c *container.Container, paths *storage.Paths, store *con
 	proc, _ := os.FindProcess(c.PID)
 	if proc != nil {
 		proc.Kill()
+	}
+
+	netManager := network.NewManager(paths)
+	for _, port := range c.Ports {
+		netManager.RemovePortForward(port.HostPort, port.Protocol)
+	}
+	if c.IP != "" {
+		netManager.ReleaseIP(c.ID)
 	}
 
 	c.Status = container.StatusStopped

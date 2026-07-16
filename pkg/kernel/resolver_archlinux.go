@@ -23,6 +23,28 @@ func (r *ArchLinuxResolver) Resolve(req *ResolveRequest) (string, string, error)
 	}
 
 	if pkgVersion == "" {
+		resolved, err := ResolveArchPackage(kernelVersion)
+		if err != nil {
+			return "", "", fmt.Errorf(
+				"archlinux kernel requires full package version (auto-resolution failed: %v).\n"+
+					"Usage: poqman kernel pull archlinux:<kernel-version>:<pkg-version>\n"+
+					"Example: poqman kernel pull archlinux:6.10.10:arch1-1\n"+
+					"Find packages at: https://archive.archlinux.org/packages/l/linux/\n"+
+					"The pkg version is the archlinux packaging suffix (e.g., arch1-1)",
+				err,
+			)
+		}
+		parsed, _ := ParseKernelRef(resolved)
+		req.Version = parsed.Version
+		parts = strings.SplitN(req.Version, ":", 2)
+		kernelVersion = parts[0]
+		pkgVersion = ""
+		if len(parts) == 2 {
+			pkgVersion = parts[1]
+		}
+	}
+
+	if pkgVersion == "" {
 		return "", "", fmt.Errorf(
 			"archlinux kernel requires full package version.\n"+
 				"Usage: poqman kernel pull archlinux:<kernel-version>:<pkg-version>\n"+

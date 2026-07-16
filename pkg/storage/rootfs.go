@@ -103,6 +103,15 @@ func InjectInit(rootfsPath string, initBinary []byte) error {
 	return os.WriteFile(initPath, initBinary, 0o755)
 }
 
+func InjectAgent(rootfsPath string, agentBinary []byte) error {
+	usrBinDir := filepath.Join(rootfsPath, "usr", "bin")
+	if err := os.MkdirAll(usrBinDir, 0o755); err != nil {
+		return fmt.Errorf("create /usr/bin dir: %w", err)
+	}
+	agentPath := filepath.Join(usrBinDir, "poqman-agent")
+	return os.WriteFile(agentPath, agentBinary, 0o755)
+}
+
 func CopyKernel(srcPath, dstDir string) error {
 	if err := os.MkdirAll(dstDir, DefaultPerms); err != nil {
 		return fmt.Errorf("create kernel dir: %w", err)

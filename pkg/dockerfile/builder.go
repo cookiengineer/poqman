@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type Builder struct {
 	tag         string
 	buildArgs   map[string]string
 	arch        string
+	ignorePatterns []IgnorePattern
 }
 
 type BuildOptions struct {
@@ -85,6 +87,9 @@ func Build(opts BuildOptions) (*image.Image, error) {
 		plat, _ := registry.ParsePlatform(opts.Platform)
 		b.arch = plat.Architecture
 	}
+
+	ignorePatterns, _ := LoadDockerIgnore(opts.ContextPath)
+	b.ignorePatterns = ignorePatterns
 
 	if err := b.process(); err != nil {
 		os.RemoveAll(b.workingDir)
@@ -220,12 +225,154 @@ func (b *Builder) handleKernel(instr *KernelInstruction) error {
 func (b *Builder) handleRun(instr *RunInstruction) error {
 	fmt.Fprintf(os.Stderr, "Step : RUN %s\n", truncate(instr.Command, 60))
 
-	// In MVP, RUN instructions are recorded but not executed via QEMU.
-	// The command will be executed at container startup by poqman-init.
-	// Full QEMU-based build execution will be added in a future phase.
-	fmt.Fprintf(os.Stderr, "  (recording RUN in image history; will execute at container startup)\n")
+	if b.kernelID == "" {
+		fmt.Fprintf(os.Stderr, "  (no KERNEL specified; recording RUN for container startup)\n")
+		return nil
+	}
+
+	kernelPath := b.paths.KernelImagePath(b.kernelID)
+	if _, err := os.Stat(kernelPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "  (kernel not found at %s; recording RUN for container startup)\n", kernelPath)
+		return nil
+	}
+
+	snapshot, err := takeSnapshot(b.curRootfs)
+	if err != nil {
+		return fmt.Errorf("snapshot rootfs: %w", err)
+	}
+
+	buildScript := fmt.Sprintf(`#!/bin/sh
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sys /sys 2>/dev/null
+mount -t devtmpfs dev /dev 2>/dev/null
+%s
+echo $? > /tmp/poqman-exit-code
+sync
+poweroff -f 2>/dev/null || reboot -f 2>/dev/null
+`, instr.Command)
+
+	scriptPath := filepath.Join(b.curRootfs, "tmp", "poqman-build.sh")
+	os.MkdirAll(filepath.Dir(scriptPath), 0o755)
+	os.WriteFile(scriptPath, []byte(buildScript), 0o755)
+
+	qemuBinary, err := findQEMU()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  (QEMU not found: %v; recording RUN for container startup)\n", err)
+		return nil
+	}
+
+	qemuArgs := []string{
+		"-kernel", kernelPath,
+		"-append", "root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet init=/tmp/poqman-build.sh",
+		"-fsdev", fmt.Sprintf("local,id=rootfs,path=%s,security_model=mapped-xattr", b.curRootfs),
+		"-device", "virtio-9p-pci,fsdev=rootfs,mount_tag=rootfs",
+		"-m", "512M",
+		"-smp", "1",
+		"-nographic",
+		"-no-reboot",
+	}
+
+	fmt.Fprintf(os.Stderr, "  Booting build VM...\n")
+
+	cmd := exec.Command(qemuBinary, qemuArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: build VM exited with error: %v\n", err)
+	}
+
+	exitCodePath := filepath.Join(b.curRootfs, "tmp", "poqman-exit-code")
+	exitData, err := os.ReadFile(exitCodePath)
+	exitCode := 0
+	if err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(exitData)), "%d", &exitCode)
+	}
+	os.Remove(exitCodePath)
+	os.Remove(scriptPath)
+
+	if exitCode != 0 {
+		return fmt.Errorf("RUN command exited with code %d", exitCode)
+	}
+
+	layerDigest := fmt.Sprintf("sha256:build-run-%d", len(b.layers))
+	layerDir := b.paths.ImageLayerPath("build-"+b.tag, layerDigest)
+	layerFile := filepath.Join(layerDir, "layer.tar.gz")
+
+	changed, err := createDiffLayer(snapshot, b.curRootfs, layerFile)
+	if err != nil {
+		return fmt.Errorf("create diff layer: %w", err)
+	}
+
+	extractDir := filepath.Join(layerDir, "fs")
+	if err := extractLayerFile(layerFile, extractDir); err != nil {
+		return fmt.Errorf("extract diff layer: %w", err)
+	}
+
+	b.layers = append(b.layers, image.Layer{
+		Digest:    layerDigest,
+		Size:      changed,
+		MediaType: "application/vnd.docker.image.rootfs.diff.tar.gzip",
+	})
+
+	fmt.Fprintf(os.Stderr, "  RUN completed (%d bytes changed)\n", changed)
 
 	return nil
+}
+
+func findQEMU() (string, error) {
+	binary, err := exec.LookPath("qemu-system-x86_64")
+	if err == nil {
+		return binary, nil
+	}
+	binary, err = exec.LookPath("qemu-system-aarch64")
+	if err == nil {
+		return binary, nil
+	}
+	return "", fmt.Errorf("no QEMU binary found in PATH")
+}
+
+func takeSnapshot(rootfs string) (map[string]int64, error) {
+	snapshot := make(map[string]int64)
+	err := filepath.Walk(rootfs, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, _ := filepath.Rel(rootfs, path)
+		snapshot[relPath] = info.ModTime().UnixNano()
+		return nil
+	})
+	return snapshot, err
+}
+
+func computeDiff(before map[string]int64, rootfs string) (int64, error) {
+	var changed int64
+	err := filepath.Walk(rootfs, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, _ := filepath.Rel(rootfs, path)
+		beforeTime, existed := before[relPath]
+		if !existed || beforeTime != info.ModTime().UnixNano() {
+			changed += info.Size()
+		}
+		return nil
+	})
+
+	for path := range before {
+		fullPath := filepath.Join(rootfs, path)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			changed++
+		}
+	}
+
+	return changed, err
 }
 
 func (b *Builder) handleCopy(instr *CopyInstruction) error {
@@ -237,8 +384,12 @@ func (b *Builder) handleCopy(instr *CopyInstruction) error {
 	}
 
 	for _, src := range instr.Sources {
+		if ShouldIgnore(src, b.ignorePatterns) {
+			fmt.Fprintf(os.Stderr, "  (ignored: %s)\n", src)
+			continue
+		}
 		srcPath := filepath.Join(b.contextPath, src)
-		if err := copyPath(srcPath, dst); err != nil {
+		if err := b.copyWithIgnore(srcPath, dst); err != nil {
 			return fmt.Errorf("copy %s: %w", src, err)
 		}
 	}
@@ -261,12 +412,16 @@ func (b *Builder) handleAdd(instr *AddInstruction) error {
 	os.MkdirAll(filepath.Dir(dst), storage.DefaultPerms)
 
 	for _, src := range instr.Sources {
+		if ShouldIgnore(src, b.ignorePatterns) {
+			fmt.Fprintf(os.Stderr, "  (ignored: %s)\n", src)
+			continue
+		}
 		if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
 			fmt.Fprintf(os.Stderr, "  (URL download for ADD not yet implemented: %s)\n", src)
 			continue
 		}
 		srcPath := filepath.Join(b.contextPath, src)
-		if err := copyPath(srcPath, dst); err != nil {
+		if err := b.copyWithIgnore(srcPath, dst); err != nil {
 			return fmt.Errorf("add %s: %w", src, err)
 		}
 	}
@@ -406,6 +561,50 @@ func copyDirContents(src, dst string) error {
 		} else {
 			copyFileContents(srcPath, dstPath)
 		}
+	}
+
+	return nil
+}
+
+func (b *Builder) copyWithIgnore(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat source: %w", err)
+	}
+
+	if srcInfo.IsDir() {
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			sp := filepath.Join(src, entry.Name())
+			dp := filepath.Join(dst, entry.Name())
+			relPath, _ := filepath.Rel(b.contextPath, sp)
+
+			if ShouldIgnore(relPath, b.ignorePatterns) {
+				continue
+			}
+
+			if entry.IsDir() {
+				os.MkdirAll(dp, storage.DefaultPerms)
+				if err := b.copyWithIgnore(sp, dp); err != nil {
+					return err
+				}
+			} else {
+				os.MkdirAll(filepath.Dir(dp), storage.DefaultPerms)
+				if err := copyFileContents(sp, dp); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		dp := dst
+		if !strings.HasSuffix(dst, filepath.Base(src)) {
+			dp = filepath.Join(dst, filepath.Base(src))
+		}
+		os.MkdirAll(filepath.Dir(dp), storage.DefaultPerms)
+		return copyFileContents(src, dp)
 	}
 
 	return nil

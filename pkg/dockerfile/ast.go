@@ -110,6 +110,16 @@ type ShellInstruction struct {
 
 func (*ShellInstruction) instruction() {}
 
+type HealthCheckInstruction struct {
+	Command     []string
+	Interval    string
+	Timeout     string
+	Retries     int
+	StartPeriod string
+}
+
+func (*HealthCheckInstruction) instruction() {}
+
 type CommentInstruction struct {
 	Text string
 }

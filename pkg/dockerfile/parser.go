@@ -133,6 +133,8 @@ func (s *scanner) parseLine(line string) (Instruction, error) {
 		return parseArg(rest)
 	case "SHELL":
 		return parseShell(rest)
+	case "HEALTHCHECK":
+		return parseHealthCheck(rest)
 	case "#":
 		return nil, nil
 	}
@@ -379,6 +381,51 @@ func parseShell(rest string) (*ShellInstruction, error) {
 	}
 
 	return nil, fmt.Errorf("SHELL requires JSON array form")
+}
+
+func parseHealthCheck(rest string) (*HealthCheckInstruction, error) {
+	if rest == "" || strings.ToUpper(rest) == "NONE" {
+		return &HealthCheckInstruction{}, nil
+	}
+
+	h := &HealthCheckInstruction{}
+
+	fields := strings.Fields(rest)
+	cmdStart := 0
+	for i, f := range fields {
+		upper := strings.ToUpper(f)
+		switch {
+		case strings.HasPrefix(upper, "--INTERVAL="):
+			h.Interval = strings.SplitN(f, "=", 2)[1]
+		case strings.HasPrefix(upper, "--TIMEOUT="):
+			h.Timeout = strings.SplitN(f, "=", 2)[1]
+		case strings.HasPrefix(upper, "--RETRIES="):
+			fmt.Sscanf(strings.SplitN(f, "=", 2)[1], "%d", &h.Retries)
+		case strings.HasPrefix(upper, "--START-PERIOD="):
+			h.StartPeriod = strings.SplitN(f, "=", 2)[1]
+		default:
+			cmdStart = i
+			goto parseCmd
+		}
+	}
+parseCmd:
+
+	if cmdStart < len(fields) && strings.ToUpper(fields[cmdStart]) == "CMD" {
+		cmdStart++
+	}
+
+	restCmd := strings.Join(fields[cmdStart:], " ")
+	if restCmd == "" {
+		return nil, fmt.Errorf("HEALTHCHECK requires a command")
+	}
+
+	if exec, ok := parseExec(restCmd); ok {
+		h.Command = exec
+	} else {
+		h.Command = []string{"CMD-SHELL", restCmd}
+	}
+
+	return h, nil
 }
 
 func parseExec(rest string) ([]string, bool) {

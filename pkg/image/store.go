@@ -6,19 +6,25 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/cookiengineer/poqman/pkg/storage"
 )
 
 type Store struct {
 	paths *storage.Paths
+	mu    sync.RWMutex
 }
+
+var globalImageMu sync.RWMutex
 
 func NewStore(paths *storage.Paths) *Store {
 	return &Store{paths: paths}
 }
 
 func (s *Store) LoadIndex() (*ImageIndex, error) {
+	globalImageMu.RLock()
+	defer globalImageMu.RUnlock()
 	path := s.paths.ImageIndexPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -35,6 +41,8 @@ func (s *Store) LoadIndex() (*ImageIndex, error) {
 }
 
 func (s *Store) SaveIndex(idx *ImageIndex) error {
+	globalImageMu.Lock()
+	defer globalImageMu.Unlock()
 	path := s.paths.ImageIndexPath()
 	data, err := json.MarshalIndent(idx, "", "  ")
 	if err != nil {

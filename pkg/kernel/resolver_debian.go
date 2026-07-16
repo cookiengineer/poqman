@@ -28,6 +28,35 @@ func (r *DebianResolver) Resolve(req *ResolveRequest) (string, string, error) {
 		pkgVersion = parts[1]
 	}
 
+	if pkgVersion == "" {
+		resolved, err := ResolveDebianPackage(kernelVersion, req.Arch)
+		if err != nil {
+			pkgName := "linux-image-" + kernelVersion
+			if !strings.Contains(kernelVersion, "-"+req.Arch) {
+				pkgName = "linux-image-" + kernelVersion + "-" + req.Arch
+			}
+			return "", "", fmt.Errorf(
+				"debian kernel requires full package version (auto-resolution failed: %v).\n"+
+					"Usage: poqman kernel pull debian:%s:<debian-pkg-version>\n"+
+					"Example: poqman kernel pull debian:6.1.0-25-amd64:6.1.106-3\n"+
+					"Find the package version at: https://packages.debian.org/search?keywords=%s",
+				err, req.Version, pkgName,
+			)
+		}
+
+		parsed, parseErr := ParseKernelRef(resolved)
+		if parseErr != nil {
+			return "", "", fmt.Errorf("parse resolved kernel ref: %w", parseErr)
+		}
+		req.Version = parsed.Version
+		parts = strings.SplitN(req.Version, ":", 2)
+		kernelVersion = parts[0]
+		pkgVersion = ""
+		if len(parts) == 2 {
+			pkgVersion = parts[1]
+		}
+	}
+
 	pkgName := "linux-image-" + kernelVersion
 	if !strings.Contains(kernelVersion, "-"+req.Arch) {
 		pkgName = "linux-image-" + kernelVersion + "-" + req.Arch

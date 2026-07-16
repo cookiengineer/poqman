@@ -99,9 +99,14 @@ func RegisterRun(router *Router) {
 				return fmt.Errorf("assemble rootfs: %w", err)
 			}
 
-			initBinary := getInitBinary(archSpec.GoArch)
+			initBinary := InitBinary(archSpec.GoArch)
 			if err := storage.InjectInit(rootfsPath, initBinary); err != nil {
 				return fmt.Errorf("inject init: %w", err)
+			}
+
+			agentBinary := AgentBinary(archSpec.GoArch)
+			if err := storage.InjectAgent(rootfsPath, agentBinary); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: inject agent: %v\n", err)
 			}
 
 			kernelSrc := paths.ImageKernelPath(img.ID)
@@ -197,7 +202,12 @@ func RegisterRun(router *Router) {
 			fmt.Fprintf(os.Stderr, "Container %s starting...\n", containerID[:12])
 
 			var proc *runtime.Process
-			if *detach || !(*interactive && *tty) {
+			var ts *runtime.TerminalState
+
+			if *interactive && *tty {
+				ts, _ = runtime.MakeRawTerminal()
+				proc, err = runtime.StartProcess(binary, qemuArgs, qemuCfg.PIDFile)
+			} else if *detach || !(*interactive && *tty) {
 				proc, err = runtime.StartProcessDetached(binary, qemuArgs, qemuCfg.PIDFile, consoleLog)
 			} else {
 				proc, err = runtime.StartProcess(binary, qemuArgs, qemuCfg.PIDFile)
@@ -239,6 +249,9 @@ func RegisterRun(router *Router) {
 
 			if *interactive && *tty {
 				proc.Wait()
+				if ts != nil {
+					ts.Restore()
+				}
 				c.Status = container.StatusStopped
 				c.FinishedAt = time.Now()
 				store.Save(c)
@@ -307,12 +320,4 @@ func parseVolumeMounts(raw string) []container.VolumeMount {
 		})
 	}
 	return result
-}
-
-func getInitBinary(goarch string) []byte {
-	return defaultInitBinary()
-}
-
-func defaultInitBinary() []byte {
-	return []byte{}
 }

@@ -3,11 +3,146 @@ package image
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cookiengineer/poqman/pkg/storage"
 )
+
+func TestStore_ConcurrentIndexAccess(t *testing.T) {
+	tmp := t.TempDir()
+	paths := &storage.Paths{
+		Base:       tmp,
+		Images:     filepath.Join(tmp, "images"),
+		Kernels:    filepath.Join(tmp, "kernels"),
+		Containers: filepath.Join(tmp, "containers"),
+		Networks:   filepath.Join(tmp, "networks"),
+		Tmp:        filepath.Join(tmp, "tmp"),
+	}
+	paths.EnsureAll()
+
+	store := NewStore(paths)
+
+	img := &Image{
+		ID:       "sha256:concurrent",
+		RepoTags: []string{"test:concurrent"},
+		Created:  time.Now(),
+	}
+	store.Save(img)
+	idx, _ := store.LoadIndex()
+	idx.Add("test:concurrent", "sha256:concurrent")
+	store.SaveIndex(idx)
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 20)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			idx, err := store.LoadIndex()
+			if err != nil {
+				errors <- err
+				return
+			}
+			if _, ok := idx.Lookup("test:concurrent"); !ok {
+				errors <- nil
+			}
+		}(i)
+	}
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			idx, _ := store.LoadIndex()
+			idx.Add("test:concurrent", "sha256:concurrent")
+			if err := store.SaveIndex(idx); err != nil {
+				errors <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		if err != nil {
+			t.Errorf("concurrent access error: %v", err)
+		}
+	}
+
+	finalIdx, err := store.LoadIndex()
+	if err != nil {
+		t.Fatalf("load final index: %v", err)
+	}
+	if _, ok := finalIdx.Lookup("test:concurrent"); !ok {
+		t.Error("index entry missing after concurrent access")
+	}
+}
+
+func TestStore_ConcurrentSaveAndRead(t *testing.T) {
+	tmp := t.TempDir()
+	paths := &storage.Paths{
+		Base:       tmp,
+		Images:     filepath.Join(tmp, "images"),
+		Kernels:    filepath.Join(tmp, "kernels"),
+		Containers: filepath.Join(tmp, "containers"),
+		Networks:   filepath.Join(tmp, "networks"),
+		Tmp:        filepath.Join(tmp, "tmp"),
+	}
+	paths.EnsureAll()
+
+	store := NewStore(paths)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			img := &Image{
+				ID:       "sha256:conc-" + string(rune('0'+id)),
+				RepoTags: []string{"test:conc-" + string(rune('0'+id))},
+				Created:  time.Now(),
+			}
+			store.Save(img)
+			idx, _ := store.LoadIndex()
+			idx.Add("test:conc-"+string(rune('0'+id)), "sha256:conc-"+string(rune('0'+id)))
+			store.SaveIndex(idx)
+		}(i)
+	}
+
+	wg.Wait()
+
+	images, err := store.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(images) < 1 {
+		t.Error("expected at least one image after concurrent saves")
+	}
+}
+
+func TestImageIndex_ConcurrentAddRemove(t *testing.T) {
+	idx := NewImageIndex()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			key := "test:" + string(rune('a'+n%26))
+			idx.Add(key, "id")
+		}(i)
+	}
+
+	wg.Wait()
+
+	if len(idx.Images) < 1 {
+		t.Error("expected entries after concurrent adds")
+	}
+}
 
 func TestStore_SaveAndGet(t *testing.T) {
 	tmp := t.TempDir()

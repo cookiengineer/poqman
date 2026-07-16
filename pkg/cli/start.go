@@ -57,6 +57,14 @@ func RegisterStart(router *Router) {
 
 			archSpec, _ := detect.GetArchSpec(img.Arch)
 
+			rootfsPath := paths.ContainerRootfsPath(c.ID)
+			initBinary := InitBinary(archSpec.GoArch)
+			if err := storage.InjectInit(rootfsPath, initBinary); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: inject init: %v\n", err)
+			}
+			agentBinary := AgentBinary(archSpec.GoArch)
+			storage.InjectAgent(rootfsPath, agentBinary)
+
 			tapName, ipAddr, err := netManager.CreateTap(c.ID)
 			if err != nil {
 				return fmt.Errorf("network: %w", err)

@@ -23,6 +23,8 @@ func main() {
 	cli.RegisterRmi(router)
 	cli.RegisterInspect(router)
 	cli.RegisterBuild(router)
+	cli.RegisterSave(router)
+	cli.RegisterLoad(router)
 
 	args := os.Args[1:]
 	if len(args) == 0 {
