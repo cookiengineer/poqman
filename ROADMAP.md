@@ -13,8 +13,7 @@
 - [x] `cmd/poqman/main.go` — Entry point, dispatch to router
 - [x] `pkg/cli/images.go` — `poqman images` — list local images
 - [x] `pkg/cli/ps.go` — `poqman ps` / `poqman ps -a` — list containers
-- [x] Verify: `CGO_ENABLED=0 go build ./... && go vet ./...`
-- [x] Tests: image name parsing, image store CRUD, container store CRUD, CLI router
+- [x] Tests: image name parsing, image store CRUD, container store CRUD, CLI router, paths
 
 ## Phase 2: Registry & Pull ✅
 **Goal:** Pull OCI images from docker.io, extract layers, store locally
@@ -62,34 +61,60 @@
 
 - [x] `cmd/poqman-agent/main.go` — virtio-serial agent (CGO_ENABLED=0, GOOS=linux)
 - [x] `pkg/runtime/agent.go` — Host-side AgentClient (Execute, Signal, Ping)
-- [x] JSON-lines protocol: execute, signal, ping
 - [x] `pkg/cli/exec.go` — `poqman exec <container> <cmd>`
 - [x] Tests: protocol marshal, agent client (pipe + unix socket), error handling
 
-## Phase 6: Lifecycle Management ← CURRENT
+## Phase 6: Lifecycle Management ✅
 **Goal:** Container/image removal, inspection
 
-- [ ] `pkg/cli/rm.go` — `poqman rm <container>` + `poqman rmi <image>`
-- [ ] `pkg/cli/inspect.go` — `poqman inspect <container|image>`
-- [ ] Tests for rm, rmi, inspect
+- [x] `pkg/cli/rm.go` — `poqman rm [-f] <container>` + `poqman rmi [-f] <image>`
+- [x] `pkg/cli/inspect.go` — `poqman inspect <container|image>` (JSON output)
+- [x] Tests: forceKill, image-in-use protection, inspect for all container states,
+  inspect JSON round-trip, full image config inspection
 
-## Phase 7: Build Engine
+## Phase 7: Build Engine ✅
 **Goal:** `poqman build` from Dockerfile
 
-- [ ] `pkg/dockerfile/scanner.go` — Lexer / tokenizer
-- [ ] `pkg/dockerfile/parser.go` — Recursive descent parser
-- [ ] `pkg/dockerfile/ast.go` — AST node types (FROM, KERNEL, RUN, COPY, etc.)
-- [ ] `pkg/dockerfile/builder.go` — Build engine (execute instructions, commit layers)
-- [ ] `pkg/cli/build.go` — `poqman build -t <tag> <path>`
-- [ ] Tests for scanner, parser, AST, builder
+- [x] `pkg/dockerfile/ast.go` — 16 AST instruction types
+- [x] `pkg/dockerfile/parser.go` — Scanner + recursive descent parser
+- [x] `pkg/dockerfile/builder.go` — Build engine (FROM, KERNEL, COPY, ADD, ENV, CMD, ...)
+- [x] `pkg/cli/build.go` — `poqman build -t <tag> [-f <Dockerfile>] [--platform]`
+- [x] Tests: 66 tests covering scanner, parser (44), builder (22)
+- [x] Verified: real Dockerfile build (FROM debian:bookworm-slim, ENV, WORKDIR, COPY, CMD)
 
-## Phase 8: Future
-- [ ] `pkg/compose/` — docker-compose.yml support
-- [ ] Multi-stage builds (FROM ... AS)
+## Phase 8: Remaining Work
+
+### High Priority
+- [ ] **QEMU-based RUN execution** — Currently RUN instructions are recorded but not
+  executed during build. Need to boot QEMU with build rootfs, run command,
+  capture filesystem diff, and commit as a new layer.
+- [ ] **Layer diffing for builds** — Before/after file manifest comparison to create
+  minimal layer tarballs instead of full rootfs copies.
+- [ ] **poqman-init embedded into poqman binary** — Currently `poqman-init` and
+  `poqman-agent` are separate binaries. Should be embedded via `go:embed` and
+  injected automatically.
+
+### Medium Priority
+- [ ] **Distribution kernel auto-resolution** — Package metadata API lookups so
+  `KERNEL "debian:6.1.0-25-amd64"` works without manual pkg-version suffix.
+- [ ] **System test suite** — End-to-end tests that launch real QEMU VMs.
+- [ ] **Container port cleanup on stop/rm** — iptables DNAT rule removal.
+- [ ] **agent socket readiness wait** — Retry logic in `poqman exec` until the
+  virtio-serial socket appears after container start.
+- [ ] **Thread-safe image pull** — Locking around index.json and layer writes.
+
+### Low Priority / Nice to Have
+- [ ] `poqman push` — Push images to OCI registries
+- [ ] `poqman compose` — docker-compose.yml support
+- [ ] Multi-stage builds (FROM ... AS + COPY --from=stage)
 - [ ] Layer caching for builds
-- [ ] Registry push (poqman push)
 - [ ] Health checks
 - [ ] Resource limits (cgroups for QEMU)
+- [ ] IPv6 networking support
+- [ ] DHCP-based IP assignment for containers
+- [ ] `podman save` / `podman load` equivalent (image export/import)
+
+---
 
 ## Known Limitations & Workarounds
 
@@ -100,25 +125,42 @@
 - **Arch Linux resolver** requires kernel version + pkg suffix (e.g., `archlinux:6.10.10:arch1-1`).
 - **Workaround:** Use OCI kernel images (`KERNEL "docker.io/poqman/kernel-*"`) which work
   with the fully-implemented OCI pull infrastructure.
-- **Planned:** Package metadata API lookups for automatic full-version resolution.
+
+### RUN Instruction During Build
+- `RUN` is parsed correctly but does **not** execute via QEMU during build.
+- The command string is recorded in image history and will execute at container startup.
+- This means images built with `RUN apt-get install ...` will NOT have those packages
+  installed until the container first boots. Use a pre-built base image instead.
+- **Workaround:** Build base images separately with pre-installed packages, then
+  `FROM` that image in your Dockerfile.
 
 ### Networking
 - Bridge interfaces require `iproute2` and `iptables` installed on the host.
 - IP forwarding must be permitted (`net.ipv4.ip_forward=1`).
-- No IPv6 support in MVP.
+- No IPv6 support.
 - No DHCP server for containers — static IP via kernel cmdline only.
+- Port forwarding DNAT rules are not cleaned up on container removal.
 
 ### Agent Socket Timing
-- The agent socket may not be immediately available after container start,
-  as the VM needs time to boot and the agent to bind.
-- `poqman exec` currently has no retry logic; if the agent isn't ready, it fails.
-
-### Image Concurrency
-- The image pull flow is not thread-safe; concurrent pulls of the same image
-  may cause race conditions with the index.json and layer directories.
+- The `agent.sock` may not be immediately available after container start
+  (VM needs time to boot and bind the socket).
+- `poqman exec` has no retry logic; if the agent isn't ready, it fails immediately.
 
 ### Rootfs Overlay
 - Rootfs assembly uses file-level copy (not overlayfs), which means:
   - Slower container creation for large images
   - Writable changes are stored in the merged rootfs directory (no separate upperdir)
   - No COW semantics — all writes go directly to the merged directory
+
+### Image Concurrency
+- The image pull flow is not thread-safe; concurrent pulls of the same image
+  may cause race conditions with the index.json and layer directories.
+
+### Pseudo-TTY Support
+- The `-t` flag on `poqman run` is parsed but terminal raw mode handling
+  is not yet implemented. Interactive sessions may not behave like a proper TTY.
+
+### Architecture Support
+- QEMU binary must be installed on the host for the target architecture.
+- Cross-architecture emulation (e.g., running arm64 container on x86_64 host)
+  requires the appropriate `qemu-system-*` binary to be available.

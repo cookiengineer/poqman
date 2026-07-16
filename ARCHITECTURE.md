@@ -14,7 +14,7 @@ to specify the kernel download source.
 ```
 poqman/
 ├── cmd/
-│   ├── poqman/main.go              # Entry point, subcommand dispatch (10 commands)
+│   ├── poqman/main.go              # Entry point, subcommand dispatch (13 commands)
 │   ├── poqman-init/main.go         # PID 1 init binary for inside VMs
 │   └── poqman-agent/main.go        # virtio-serial agent for exec
 ├── pkg/
@@ -30,7 +30,13 @@ poqman/
 │   │   ├── exec.go                 # poqman exec [--workdir]
 │   │   ├── exec_test.go            # RegisterExec test
 │   │   ├── logs.go                 # poqman logs [-f] [--tail]
-│   │   └── kernel.go               # poqman kernel pull|list|rm
+│   │   ├── kernel.go               # poqman kernel pull|list|rm
+│   │   ├── rm.go                   # poqman rm [-f] + poqman rmi [-f]
+│   │   ├── rm_test.go              # rm/rmi registration + forceKill tests
+│   │   ├── inspect.go              # poqman inspect <container|image>
+│   │   ├── inspect_test.go         # Inspect result + JSON round-trip tests
+│   │   ├── build.go                # poqman build -t <tag> [-f <Dockerfile>] [--platform]
+│   │   └── build_test.go           # RegisterBuild test
 │   ├── image/
 │   │   ├── image.go                # Image, ImageConfig, Layer, ImageIndex types
 │   │   ├── name.go                 # ImageRef parser (registry/repo:tag@digest)
@@ -71,7 +77,14 @@ poqman/
 │   │   ├── resolver_test.go        # Resolver registry + distro tests
 │   │   ├── resolver_debian.go      # Debian .deb download + extraction
 │   │   ├── resolver_alpine.go      # Alpine .apk download + extraction
-│   │   └── resolver_archlinux.go   # Arch Linux kernel download + extraction
+│   │   ├── resolver_archlinux.go   # Arch Linux kernel download + extraction
+│   │   └── puller.go               # Kernel pull orchestrator
+│   ├── dockerfile/
+│   │   ├── ast.go                  # AST nodes (16 instruction types)
+│   │   ├── parser.go               # Scanner + recursive descent parser
+│   │   ├── parser_test.go          # 44 parser/scanner tests
+│   │   ├── builder.go              # Build engine (FROM, KERNEL, COPY, ENV, etc.)
+│   │   └── builder_test.go         # 22 builder tests
 │   └── storage/
 │       ├── paths.go                # XDG-compliant storage layout (30+ path helpers)
 │       ├── paths_test.go           # Path resolution + all path helper tests
@@ -105,7 +118,7 @@ $XDG_DATA_HOME/poqman/       (~/.local/share/poqman/)
 │       ├── config.json               # { image, cmd, env, kernel, network, volumes }
 │       ├── state.json                # { status, pid, startedAt, finishedAt, ip }
 │       ├── rootfs/                   # Merged root filesystem (layers + writable upperdir)
-│       ├── kernel/                   # Symlinked/copied kernel for this container
+│       ├── kernel/                   # Copied kernel for this container
 │       │   └── bzImage
 │       ├── qmp.sock                  # QMP unix socket
 │       ├── monitor.sock              # QEMU monitor unix socket
@@ -158,13 +171,9 @@ architecture is used.
 |--------|---------------|------------|
 | debian | `.deb` (ar archive) | `ar x` → `tar xzf` data.tar.gz |
 | alpine | `.apk` (tar.gz) | `tar xzf` |
-| archlinux | `.pkg.tar.zst` | `zstdcat | tar xf` |
+| archlinux | `.pkg.tar.zst` | `zstdcat \| tar xf` |
 | oci | OCI image | Full registry pull + `/boot/vmlinuz` search |
 | http/https | Direct URL | Auto-detects format from extension |
-
-**Important LIMITATION (MVP):** Distribution resolvers require full package
-version strings. Example: `debian:6.1.0-25-amd64:6.1.106-3`. The resolvers
-will be enhanced in a future phase with package metadata API lookups.
 
 ### 3. PID 1 Inside VM: poqman-init
 
@@ -193,17 +202,9 @@ A background agent running inside the VM, communicating over a virtio-serial por
 ```
 
 **Protocol:** JSON lines over the unix socket.
-
 ```
-Request:  {"id":1, "command":"execute", "args":["cat","/etc/hosts"],
-           "env":["PATH=/usr/bin"], "cwd":"/"}
-Response: {"id":1, "exit":0, "stdout":"127.0.0.1 localhost\n", "stderr":""}
-
-Request:  {"id":2, "command":"ping"}
-Response: {"id":2, "ok":true}
-
-Request:  {"id":3, "command":"signal", "signal":"SIGTERM"}
-Response: {"id":3, "ok":true}
+Host→VM: {"id":1, "command":"execute", "args":["cat","/etc/hosts"], "env":["PATH=/usr/bin"], "cwd":"/"}
+VM→Host: {"id":1, "exit":0, "stdout":"127.0.0.1 localhost\n", "stderr":""}
 ```
 
 **Host-side client:** `runtime.AgentClient` with `Execute()`, `Signal()`, `Ping()` methods,
@@ -248,14 +249,14 @@ iptables DNAT rules. All managed by `network.Manager`.
 7. Save image config + update index.json
 ```
 
-### 8. Dockerfile Build Process (Phase 7 — planned)
+### 8. Dockerfile Build Process (implemented)
 
-1. **Parse** Dockerfile → AST (instructions)
+1. **Parse** Dockerfile → AST (16 instruction types supported)
 2. **FROM**: Pull base image layers, extract to working rootfs
 3. **KERNEL**: Download/extract kernel package → store in image
-4. **For each RUN**: Boot QEMU with build rootfs via 9p, run command, capture diff → layer
-5. **For each COPY/ADD**: Copy files into rootfs, create layer
-6. **For ENV, CMD, etc.**: Update image config in memory
+4. **RUN**: Recorded as image history entry (QEMU-based execution not yet implemented)
+5. **COPY/ADD**: Copy files from build context into rootfs
+6. **ENV, CMD, WORKDIR, etc.**: Update image config in memory
 7. **Commit**: Store image config, layers, kernel → image store
 
 ### 9. Dependencies
@@ -285,18 +286,19 @@ created ──► running ──► stopped
              failed       removed
 ```
 
-### 11. Test Coverage (123 tests, all passing)
+### 11. Test Coverage (213 tests, all passing)
 
 | Package | Coverage | Tests |
 |---------|----------|-------|
 | pkg/container | 82.9% | 11 |
 | pkg/image | 80.9% | 15 |
 | pkg/storage | 71.1% | 12 |
+| pkg/dockerfile | 67.3% | 66 |
 | pkg/runtime | 45.0% | 30 |
 | pkg/kernel | 42.1% | 17 |
 | pkg/network | 30.1% | 9 |
 | pkg/registry | 20.8% | 20 |
-| pkg/cli | 7.4% | 9 |
+| pkg/cli | 10.7% | 33 |
 
 Lower coverage in runtime/kernel/network/registry is expected for packages
 with heavy I/O, system calls, and external HTTP dependencies.
