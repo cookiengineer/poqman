@@ -9,6 +9,7 @@ import (
 
 	"github.com/cookiengineer/poqman/pkg/container"
 	"github.com/cookiengineer/poqman/pkg/image"
+	"github.com/cookiengineer/poqman/pkg/kernel"
 	"github.com/cookiengineer/poqman/pkg/network"
 	"github.com/cookiengineer/poqman/pkg/registry"
 	"github.com/cookiengineer/poqman/pkg/runtime"
@@ -163,6 +164,17 @@ func RegisterRun(router *Router) {
 				return fmt.Errorf("no kernel found. Build image with KERNEL directive first")
 			}
 
+			initrdPath := paths.ContainerInitrdPath(containerID)
+			var useInitrd bool
+			if img.KernelID != "" && kernel.HasNinePModules(paths, img.KernelID) {
+				initBinary := InitBinary(archSpec.GoArch)
+				if err := kernel.BuildInitrd(paths, img.KernelID, initBinary, initrdPath); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: initrd build failed: %v\n", err)
+				} else {
+					useInitrd = true
+				}
+			}
+
 			consoleLog := paths.ContainerConsoleLogPath(containerID)
 
 			qemuCfg := runtime.QEMUConfig{
@@ -181,6 +193,8 @@ func RegisterRun(router *Router) {
 				AgentSocket:   paths.ContainerAgentSocketPath(containerID),
 				PIDFile:       paths.ContainerPIDFilePath(containerID),
 				VolumeMounts:  volumes,
+				UseInitrd:     useInitrd,
+				Initrd:        initrdPath,
 			}
 
 			if hasNetwork && tapName != "" {

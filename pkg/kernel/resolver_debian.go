@@ -73,9 +73,12 @@ func (r *DebianResolver) Resolve(req *ResolveRequest) (string, string, error) {
 	}
 
 	mappedArch := mapDebArch(req.Arch)
-	poolPath := debianKernelPool(req.Arch)
-	url := fmt.Sprintf("http://deb.debian.org/debian/pool/main/l/%s/%s_%s_%s.deb",
-		poolPath, pkgName, pkgVersion, mappedArch)
+	pkgDownloadName := pkgName
+	if req.Arch == "amd64" || req.Arch == "arm64" {
+		pkgDownloadName = pkgName + "-unsigned"
+	}
+	url := fmt.Sprintf("http://deb.debian.org/debian/pool/main/l/linux/%s_%s_%s.deb",
+		pkgDownloadName, pkgVersion, mappedArch)
 
 	return url, "deb", nil
 }
@@ -102,14 +105,7 @@ func mapDebArch(arch string) string {
 }
 
 func debianKernelPool(arch string) string {
-	switch arch {
-	case "amd64":
-		return "linux-signed-amd64"
-	case "arm64":
-		return "linux-signed-arm64"
-	default:
-		return "linux"
-	}
+	return "linux"
 }
 
 func ExtractDeb(debPath string, outputDir string) error {

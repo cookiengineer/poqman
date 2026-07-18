@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"runtime"
 
 	"github.com/cookiengineer/poqman/pkg/dockerfile"
 )
@@ -28,11 +29,17 @@ func RegisterBuild(router *Router) {
 				contextPath = args[0]
 			}
 
+			goarch := runtime.GOARCH
+			if *platform != "" {
+				goarch = platformToGoarch(*platform)
+			}
+
 			opts := dockerfile.BuildOptions{
 				Tag:         *tag,
 				ContextPath: contextPath,
 				Dockerfile:  *fileFlag,
 				Platform:    *platform,
+				InitBinary:  InitBinary(goarch),
 			}
 
 			_, err := dockerfile.Build(opts)
@@ -44,4 +51,21 @@ func RegisterBuild(router *Router) {
 			return nil
 		},
 	})
+}
+
+func platformToGoarch(platform string) string {
+	switch platform {
+	case "linux/amd64":
+		return "amd64"
+	case "linux/arm64":
+		return "arm64"
+	case "linux/arm", "linux/arm/v7":
+		return "arm"
+	case "linux/riscv64":
+		return "riscv64"
+	case "linux/ppc64le":
+		return "ppc64le"
+	default:
+		return "amd64"
+	}
 }

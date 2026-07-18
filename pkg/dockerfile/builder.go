@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cookiengineer/poqman/pkg/image"
@@ -33,6 +34,7 @@ type Builder struct {
 	buildArgs   map[string]string
 	arch        string
 	ignorePatterns []IgnorePattern
+	initBinary  []byte
 }
 
 type BuildOptions struct {
@@ -41,6 +43,7 @@ type BuildOptions struct {
 	Dockerfile  string
 	Platform    string
 	BuildArgs   map[string]string
+	InitBinary  []byte
 }
 
 func Build(opts BuildOptions) (*image.Image, error) {
@@ -51,8 +54,8 @@ func Build(opts BuildOptions) (*image.Image, error) {
 	paths.EnsureAll()
 
 	dfPath := opts.Dockerfile
-	if dfPath == "" || dfPath == "Dockerfile" {
-		dfPath = filepath.Join(opts.ContextPath, "Dockerfile")
+	if dfPath == "" {
+		dfPath = "Dockerfile"
 	}
 	if !filepath.IsAbs(dfPath) {
 		dfPath = filepath.Join(opts.ContextPath, dfPath)
@@ -79,6 +82,7 @@ func Build(opts BuildOptions) (*image.Image, error) {
 		tag:          opts.Tag,
 		buildArgs:    opts.BuildArgs,
 		arch:         "amd64",
+		initBinary:   opts.InitBinary,
 	}
 	if b.buildArgs == nil {
 		b.buildArgs = make(map[string]string)
@@ -243,13 +247,27 @@ func (b *Builder) handleRun(instr *RunInstruction) error {
 	}
 
 	buildScript := fmt.Sprintf(`#!/bin/sh
-mount -t proc proc /proc 2>/dev/null
-mount -t sysfs sys /sys 2>/dev/null
-mount -t devtmpfs dev /dev 2>/dev/null
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mkdir -p /tmp
+mkdir -p /etc
+if [ -x /bin/busybox ]; then
+  /bin/busybox ip link set eth0 up
+  /bin/busybox ip addr add 10.0.2.15/24 dev eth0
+  /bin/busybox ip route add default via 10.0.2.2
+fi
+echo "nameserver 10.0.2.3" > /etc/resolv.conf
+echo 'DPkg::Options {"--force-all";};' > /etc/apt/apt.conf.d/99-poqman
+echo 'Acquire::AllowInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99-poqman
+echo 'Acquire::AllowDowngradeToInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99-poqman
+echo 'APT::Get::AllowUnauthenticated "true";' >> /etc/apt/apt.conf.d/99-poqman
 %s
 echo $? > /tmp/poqman-exit-code
 sync
-poweroff -f 2>/dev/null || reboot -f 2>/dev/null
+poweroff -f 2>/dev/null || reboot -f
 `, instr.Command)
 
 	scriptPath := filepath.Join(b.curRootfs, "tmp", "poqman-build.sh")
@@ -262,15 +280,38 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 		return nil
 	}
 
+	setupMappedXattr(b.curRootfs)
+
+	initrdPath := filepath.Join(b.workingDir, "initrd.gz")
+	var useInitrd bool
+	if kernel.HasNinePModules(b.paths, b.kernelID) {
+		if err := kernel.BuildInitrd(b.paths, b.kernelID, b.initBinary, initrdPath); err != nil {
+			fmt.Fprintf(os.Stderr, "  (initrd build failed: %v; trying without initrd)\n", err)
+		} else {
+			useInitrd = true
+			fmt.Fprintf(os.Stderr, "  Initrd generated with 9p modules\n")
+		}
+	}
+
+	kernelAppend := "root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet panic=1 init=/tmp/poqman-build.sh"
+	if useInitrd {
+		kernelAppend = "console=ttyS0 quiet panic=1 init=/tmp/poqman-build.sh"
+	}
+
 	qemuArgs := []string{
 		"-kernel", kernelPath,
-		"-append", "root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet panic=1 init=/tmp/poqman-build.sh",
+		"-append", kernelAppend,
 		"-fsdev", fmt.Sprintf("local,id=rootfs,path=%s,security_model=mapped-xattr", b.curRootfs),
 		"-device", "virtio-9p-pci,fsdev=rootfs,mount_tag=rootfs",
+		"-nic", "user,model=virtio-net-pci",
 		"-m", "512M",
 		"-smp", "1",
 		"-nographic",
 		"-no-reboot",
+	}
+
+	if useInitrd {
+		qemuArgs = append(qemuArgs, "-initrd", initrdPath)
 	}
 
 	fmt.Fprintf(os.Stderr, "  Booting build VM...\n")
@@ -279,7 +320,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	buildCtx, buildCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer buildCancel()
 
 	if err := cmd.Start(); err != nil {
@@ -289,24 +330,33 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
+	var qemuErr error
 	select {
 	case err := <-done:
+		qemuErr = err
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: build VM exited with error: %v\n", err)
 		}
 	case <-buildCtx.Done():
 		cmd.Process.Kill()
-		fmt.Fprintf(os.Stderr, "  Warning: build VM timed out after 120s, killed\n")
+		qemuErr = fmt.Errorf("build VM timed out after 120s")
+		fmt.Fprintf(os.Stderr, "  Error: build VM timed out after 120s\n")
 	}
 
 	exitCodePath := filepath.Join(b.curRootfs, "tmp", "poqman-exit-code")
-	exitData, err := os.ReadFile(exitCodePath)
-	exitCode := 0
-	if err == nil {
-		fmt.Sscanf(strings.TrimSpace(string(exitData)), "%d", &exitCode)
-	}
+	exitData, readErr := os.ReadFile(exitCodePath)
 	os.Remove(exitCodePath)
 	os.Remove(scriptPath)
+
+	if readErr != nil {
+		if qemuErr != nil {
+			return fmt.Errorf("build VM failed (exit code file not written - likely kernel panic): %w", qemuErr)
+		}
+		return fmt.Errorf("build VM completed but exit code file was not written")
+	}
+
+	exitCode := 0
+	fmt.Sscanf(strings.TrimSpace(string(exitData)), "%d", &exitCode)
 
 	if exitCode != 0 {
 		return fmt.Errorf("RUN command exited with code %d", exitCode)
@@ -339,6 +389,21 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null
 	fmt.Fprintf(os.Stderr, "  RUN completed (%d bytes changed)\n", changed)
 
 	return nil
+}
+
+func setupMappedXattr(rootfs string) {
+	filepath.Walk(rootfs, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		setXattr(path, "user.virtfs.uid", []byte{0, 0, 0, 0})
+		setXattr(path, "user.virtfs.gid", []byte{0, 0, 0, 0})
+		return nil
+	})
+}
+
+func setXattr(path, name string, value []byte) {
+	syscall.Setxattr(path, name, value, 0)
 }
 
 func findQEMU() (string, error) {
@@ -537,13 +602,20 @@ func (b *Builder) commit() (*image.Image, error) {
 		MediaType: "application/vnd.docker.image.rootfs.diff.tar.gzip",
 	})
 
+	ref, err := image.ParseImageRef(b.tag)
+	if err != nil {
+		return nil, fmt.Errorf("parse tag %q: %w", b.tag, err)
+	}
+	fullName := ref.FullName()
+
 	img := &image.Image{
 		ID:        imgID,
-		RepoTags:  []string{b.tag},
+		RepoTags:  []string{fullName},
 		Arch:      b.arch,
 		Config:    b.imageConfig,
 		Layers:    b.layers,
 		KernelRef: b.kernelRef,
+		KernelID:  b.kernelID,
 		Created:   time.Now(),
 		Size:      dirSize(b.curRootfs),
 	}
@@ -554,10 +626,10 @@ func (b *Builder) commit() (*image.Image, error) {
 	}
 
 	idx, _ := imgStore.LoadIndex()
-	idx.Add(b.tag, imgID)
+	idx.Add(fullName, imgID)
 	imgStore.SaveIndex(idx)
 
-	fmt.Fprintf(os.Stderr, "Built: %s (ID: %.20s)\n", b.tag, imgID)
+	fmt.Fprintf(os.Stderr, "Built: %s (ID: %.20s)\n", fullName, imgID)
 
 	return img, nil
 }
@@ -576,6 +648,17 @@ func copyDirContents(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
+
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			continue
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, _ := os.Readlink(srcPath)
+			os.Symlink(linkTarget, dstPath)
+			continue
+		}
 
 		if entry.IsDir() {
 			copyDirContents(srcPath, dstPath)
@@ -674,9 +757,14 @@ func copyFileContents(src, dst string) error {
 	}
 	defer in.Close()
 
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
 	os.MkdirAll(filepath.Dir(dst), storage.DefaultPerms)
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
 	if err != nil {
 		return err
 	}

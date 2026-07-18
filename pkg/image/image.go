@@ -15,6 +15,7 @@ type Image struct {
 	Config    ImageConfig `json:"config"`
 	Layers    []Layer     `json:"layers"`
 	KernelRef string      `json:"kernelRef,omitempty"`
+	KernelID  string      `json:"kernelId,omitempty"`
 	Created   time.Time   `json:"created"`
 	Size      int64       `json:"size"`
 }

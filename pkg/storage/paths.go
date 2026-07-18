@@ -28,6 +28,8 @@ const (
 	initBinaryName   = "init"
 	agentBinaryName  = "poqman-agent"
 	bzImageName      = "bzImage"
+	modulesDirName   = "modules"
+	initrdName       = "initrd.gz"
 )
 
 type Paths struct {
@@ -114,6 +116,10 @@ func (p *Paths) KernelConfigPath(id string) string {
 	return filepath.Join(p.Kernels, id, configFileName)
 }
 
+func (p *Paths) KernelModulesDir(id string) string {
+	return filepath.Join(p.Kernels, id, modulesDirName)
+}
+
 func (p *Paths) ContainerPath(id string) string {
 	return filepath.Join(p.Containers, id)
 }
@@ -136,6 +142,10 @@ func (p *Paths) ContainerKernelDir(id string) string {
 
 func (p *Paths) ContainerKernelPath(id string) string {
 	return filepath.Join(p.Containers, id, kernelSubDir, bzImageName)
+}
+
+func (p *Paths) ContainerInitrdPath(id string) string {
+	return filepath.Join(p.Containers, id, initrdName)
 }
 
 func (p *Paths) ContainerConsoleLogPath(id string) string {

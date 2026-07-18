@@ -31,6 +31,7 @@ type QEMUConfig struct {
 	KVM          bool
 	NoGraphic    bool
 	Daemonize    bool
+	UseInitrd    bool
 }
 
 func BuildArgs(cfg QEMUConfig) ([]string, error) {
@@ -135,13 +136,15 @@ func BuildArgs(cfg QEMUConfig) ([]string, error) {
 func BuildKernelAppend(cfg QEMUConfig) string {
 	var parts []string
 
-	if cfg.RootFSFormat == "" || cfg.RootFSFormat == "9p" {
-		parts = append(parts,
-			"root=rootfs",
-			"rootfstype=9p",
-			"rootflags=trans=virtio,version=9p2000.L",
-			"rw",
-		)
+	if !cfg.UseInitrd {
+		if cfg.RootFSFormat == "" || cfg.RootFSFormat == "9p" {
+			parts = append(parts,
+				"root=rootfs",
+				"rootfstype=9p",
+				"rootflags=trans=virtio,version=9p2000.L",
+				"rw",
+			)
+		}
 	}
 
 	if cfg.Console != "" {

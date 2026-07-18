@@ -98,7 +98,12 @@ $XDG_DATA_HOME/poqman/       (~/.local/share/poqman/)
 │   ├── index.json
 │   └── <kernel-id>/
 │       ├── bzImage
-│       └── config.json
+│       ├── config.json
+│       └── modules/                 # 9p kernel modules for initrd
+│           └── <version>/
+│               └── kernel/
+│                   ├── fs/9p/9p.ko
+│                   └── net/9p/{9pnet.ko, 9pnet_virtio.ko}
 ├── containers/
 │   └── <container-id>/
 │       ├── config.json / state.json
@@ -113,18 +118,57 @@ $XDG_DATA_HOME/poqman/       (~/.local/share/poqman/)
 
 ## Key Design Decisions
 
-### 1. Root Filesystem: virtio-9p
+### 1. Root Filesystem: virtio-9p + initrd
 
 Containers mount the host-side rootfs directory directly into the VM via 9p.
 No disk image creation, no loopback mounts, no root required.
 
+QEMU exposes the rootfs as a 9p filesystem export:
 ```
-QEMU args:
 -fsdev local,id=rootfs,path=<rootfs>,security_model=mapped-xattr
 -device virtio-9p-pci,fsdev=rootfs,mount_tag=rootfs
+```
 
-Kernel cmdline:
-root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw
+**Initrd fallback for kernels with 9p as module (e.g. Debian):**
+
+Distro kernels (Debian, Ubuntu) compile 9p support as loadable modules
+(`CONFIG_9P_FS=m`) rather than built-in (`=y`). This means the kernel
+cannot mount a 9p root filesystem directly from `root=rootfs rootfstype=9p`.
+
+To support these kernels, poqman automatically generates a minimal initrd
+(cpio.gz archive) when 9p kernel modules are available. The initrd:
+
+1. Binds a minimal busybox userspace (`sh`, `mount`, `umount`, `insmod`, `switch_root`)
+2. Includes the 9p, 9pnet, and 9pnet_virtio .ko files from the kernel package
+3. Runs an init script that:
+   - Mounts `/proc`, `/sys`, `/dev`
+   - Loads 9p modules via `insmod` (order: 9p → 9pnet → 9pnet_virtio)
+   - Mounts the 9p rootfs tag to `/newroot`
+   - Calls `switch_root /newroot <init>` to pivot into the real root
+
+**Kernel cmdline with initrd** (no `root=`/`rootfstype=` — initrd handles mount):
+```
+console=ttyS0 quiet init=/sbin/init
+```
+
+**Kernel cmdline without initrd** (9p built-in, e.g. Alpine):
+```
+root=rootfs rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw console=ttyS0 quiet
+```
+
+**Module storage per kernel:**
+```
+kernels/<id>/
+├── bzImage
+├── config.json
+└── modules/
+    └── <version>/
+        └── kernel/
+            ├── fs/9p/
+            │   └── 9p.ko
+            └── net/9p/
+                ├── 9pnet.ko
+                └── 9pnet_virtio.ko
 ```
 
 ### 2. Kernel: Distribution Package Download
@@ -181,7 +225,7 @@ Parse ref → GET manifest (multi Accept) → resolve per-arch if manifest list
 2. **Load .dockerignore** → wildcard/directory/negate patterns for COPY/ADD filtering
 3. **FROM**: Pull + extract base image layers into build rootfs
 4. **KERNEL**: Pull + extract kernel (auto-resolves versions via distro APIs)
-5. **RUN**: With KERNEL + QEMU: snapshot → boot VM with 9p rootfs → execute → compute diff → create tar.gz layer. Falls back to recording-only otherwise.
+5. **RUN**: With KERNEL + QEMU: snapshot → generate initrd if kernel has 9p modules → boot VM with 9p rootfs (via initrd mount) → execute → compute diff → create tar.gz layer. Falls back to recording-only otherwise.
 6. **COPY/ADD**: Copy from build context, respecting .dockerignore
 7. **HEALTHCHECK**: Parse --interval/--timeout/--retries/--start-period + CMD
 8. **Commit**: Store image config, layers, kernel → image store
@@ -249,7 +293,38 @@ with QEMU and skip only for missing QEMU binary.
 | pkg/cli | 14.5% | 46 |
 | pkg/lifecycle | e2e | 13 |
 
-### 14. Supported Linux Distributions for Kernels
+### 14. Initrd Generation (9p Module Loading)
+
+Distro kernels (Debian, Ubuntu) ship 9p as kernel modules (`CONFIG_9P_FS=m`).
+To boot these kernels, poqman automatically generates a cpio.gz initrd:
+
+1. **Detection**: When kernel is pulled, 9p .ko modules are extracted and stored
+   alongside the kernel binary in `kernels/<id>/modules/`.
+2. **Generation**: Before booting a VM, `kernel.BuildInitrd()` creates a
+   temporary initrd containing busybox (sh, mount, insmod, switch_root) and
+   the 9p kernel modules, packed as a cpio.gz archive.
+3. **Boot**: QEMU is invoked with `-initrd <path>`. The kernel cmdline omits
+   `root=`/`rootfstype=` — the initrd init script mounts 9p rootfs, then
+   calls `switch_root` to pivot into the real filesystem.
+4. **Fallback**: If no 9p modules exist (e.g. Alpine kernel with built-in 9p),
+   no initrd is generated. The kernel boots directly via `root=rootfs rootfstype=9p`.
+
+Init script loaded by the initrd:
+```sh
+/bin/mount -t proc proc /proc
+/bin/mount -t sysfs sys /sys
+/bin/mount -t devtmpfs dev /dev
+/bin/insmod /lib/modules/9p.ko 2>/dev/null
+/bin/insmod /lib/modules/9pnet.ko 2>/dev/null
+/bin/insmod /lib/modules/9pnet_virtio.ko 2>/dev/null
+/bin/mkdir -p /newroot
+/bin/mount -t 9p -o trans=virtio,version=9p2000.L rootfs /newroot
+/bin/umount /proc
+/bin/umount /sys
+exec /bin/switch_root /newroot /sbin/init
+```
+
+### 15. Supported Linux Distributions for Kernels
 
 | Distro | Status | Auto-Resolution | Package Pool |
 |--------|--------|-----------------|--------------|

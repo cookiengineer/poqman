@@ -1,2 +1,4 @@
+/bin/poqman
 /bin/poqman-agent
 /bin/poqman-init
+!/bin/.gitkeep

@@ -44,9 +44,13 @@ func (p *Puller) Pull(rawRef string) (*Kernel, error) {
 	}
 
 	existing, err := p.store.Resolve(req)
-	if err == nil {
+	if err == nil && HasNinePModules(p.paths, existing.ID) {
 		fmt.Fprintf(os.Stderr, "Kernel %s already cached (ID: %.20s)\n", rawRef, existing.ID)
 		return existing, nil
+	}
+
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "Kernel %s cached but missing 9p modules, re-pulling...\n", rawRef)
 	}
 
 	fmt.Fprintf(os.Stderr, "Pulling kernel %s...\n", rawRef)
@@ -95,6 +99,8 @@ func (p *Puller) Pull(rawRef string) (*Kernel, error) {
 	if err := copyFile(kernelBinPath, kernelDestPath); err != nil {
 		return nil, fmt.Errorf("copy kernel binary: %w", err)
 	}
+
+	copyKernelModules(extractedDir, p.paths.KernelModulesDir(kernelID))
 
 	kernel := &Kernel{
 		ID:         kernelID,
@@ -195,6 +201,34 @@ func (p *Puller) downloadAndExtract(downloadURL string, req *ResolveRequest, for
 	}
 
 	return extractDir, nil
+}
+
+func copyKernelModules(extractedDir, modulesDest string) {
+	filepath.Walk(extractedDir, func(srcPath string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(info.Name(), ".ko") {
+			return nil
+		}
+
+		relPath := strings.TrimPrefix(srcPath, extractedDir)
+		relPath = strings.TrimPrefix(relPath, "/")
+
+		is9p := strings.Contains(relPath, "fs/9p/") || strings.Contains(relPath, "net/9p/") ||
+			strings.Contains(relPath, "drivers/virtio/") || strings.Contains(relPath, "fs/fscache/") ||
+			strings.Contains(relPath, "fs/netfs/") || strings.Contains(relPath, "drivers/net/virtio_net") ||
+			strings.Contains(relPath, "drivers/net/net_failover") || strings.Contains(relPath, "net/core/failover")
+		if !is9p {
+			return nil
+		}
+
+		baseName := filepath.Base(relPath)
+		dest := filepath.Join(modulesDest, baseName)
+		os.MkdirAll(filepath.Dir(dest), storage.DefaultPerms)
+		copyFile(srcPath, dest)
+		return nil
+	})
 }
 
 func parseOCIImageRef(raw string) (image.ImageRef, error) {

@@ -6,6 +6,8 @@
 **0 skips** in unit tests — all kernel API tests use `t.Fatalf`.
 `go vet` clean. `CGO_ENABLED=0` builds for all binaries.
 
+**Active**: Initrd support for distro kernels (Phase 12).
+
 ```
 CGO_ENABLED=0 go test $(go list ./... | grep -v lifecycle) -count=1    # 251 tests, 0 skips
 CGO_ENABLED=0 go test ./pkg/lifecycle/ -count=1                         # 13 integration tests
@@ -36,6 +38,12 @@ CGO_ENABLED=0 go build ./...                                             # clean
 ## Remaining Tasks
 
 ### Medium Priority
+- [ ] **Initrd support for distro kernels** (see Phase 12 in ROADMAP.md)
+  - [ ] Extract 9p kernel modules during kernel pull
+  - [ ] Build minimal cpio.gz initrd with busybox + 9p .ko modules
+  - [ ] Pass `-initrd` to QEMU in build VM (builder.go)
+  - [ ] Pass `-initrd` to QEMU in run VM (run.go)
+  - [ ] Adjust kernel cmdline when initrd is used (omit root=/rootfstype=)
 - [ ] `.dockerignore` `**` globstar deep recursive matching
 - [ ] Fedora/RHEL kernel resolver
 
